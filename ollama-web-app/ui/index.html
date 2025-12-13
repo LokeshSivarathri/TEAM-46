@@ -1,1 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice-to-Voice Ollama Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom CSS for the recording indicator */
+        .recording-pulse {
+            /* Smooth pulsing effect */
+            animation: pulse-red 1.5s infinite;
+        }
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.3; transform: scale(1.2); }
+        }
+        /* Style for user/AI chat bubbles */
+        .user-bubble {
+            background-color: #4f46e5; /* indigo-600 */
+            align-self: flex-end;
+        }
+        .ai-bubble {
+            background-color: #059669; /* emerald-600 */
+            align-self: flex-start;
+        }
+        /* Ensure the modal is on top of everything */
+        #modal-container {
+            z-index: 50;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex items-center justify-center p-4">
 
+    <div id="app" class="w-full max-w-2xl bg-gray-800 rounded-xl shadow-2xl p-6 md:p-10 border border-indigo-700">
+        <h1 class="text-3xl font-extrabold mb-4 text-center text-indigo-400">Voice-to-Voice Ollama Assistant</h1>
+        <p class="text-sm text-center text-gray-400 mb-6 border-b border-gray-700 pb-4">
+            7-Step Loop: Mic ON → Text → FastAPI/Ollama (POST) → Speak → Mic RESUME.
+            <br/>
+            <span class="font-bold text-yellow-400">NOTE: This requires your Python backend (`main.py`) to be running and accessible.</span>
+        </p>
+        
+        <div class="mb-6 flex items-center justify-between p-3 bg-gray-700 rounded-xl shadow-inner border border-gray-600">
+            <span id="status-message" class="text-sm text-gray-300 font-medium">Initializing...</span>
+            <div class="flex items-center space-x-2">
+                <span class="text-xs text-red-400 font-semibold">REC</span>
+                <div id="recording-indicator" class="w-4 h-4 rounded-full bg-red-500 hidden shadow-lg"></div>
+            </div>
+        </div>
+
+        <div id="conversation-log" class="flex flex-col bg-gray-700 p-4 rounded-xl h-64 overflow-y-auto mb-6 border border-gray-600 space-y-3">
+            </div>
+
+        <div class="flex justify-center">
+            <button id="main-toggle-btn" 
+                    class="w-full sm:w-2/3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 px-6 rounded-xl shadow-xl transition duration-300 transform hover:scale-[1.02] disabled:bg-gray-500 disabled:shadow-none"
+                    onclick="toggleConversation()">
+                Start Conversation
+            </button>
+        </div>
+        
+        <div class="mt-6 p-4 bg-red-800 bg-opacity-30 rounded-xl border border-red-700 shadow-inner">
+            <h2 class="text-lg font-semibold text-red-300 mb-2">Need Immediate Voice Support?</h2>
+            <p class="text-xs text-red-200 mb-3 italic">
+                (Optional fallback information for critical support.)
+            </p>
+            <div class="flex flex-col space-y-2">
+                <div class="flex items-center justify-between p-2 bg-red-900 bg-opacity-50 rounded-lg">
+                    <span class="text-sm font-medium text-white">India: AASRA Helpline (24/7)</span>
+                    <a href="tel:+912227546669" class="text-sm font-bold text-red-300 hover:underline">+91-22-27546669</a>
+                </div>
+                <div class="flex items-center justify-between p-2 bg-red-900 bg-opacity-50 rounded-lg">
+                    <span class="text-sm font-medium text-white">Trusted Person Near You</span>
+                    <a href="tel:+917815875511" class="text-sm font-bold text-red-300 hover:underline">+91 7815875511</a>
+                </div>
+            </div>
+        </div>
+
+        <div id="modal-container" class="fixed inset-0 bg-black bg-opacity-70 hidden items-center justify-center p-4">
+            <div class="bg-gray-800 p-6 rounded-xl shadow-2xl max-w-sm w-full border border-red-500">
+                <h3 class="text-xl font-semibold mb-3 text-red-400">System Message</h3>
+                <p id="modal-message" class="text-gray-300 mb-4"></p>
+                <button onclick="document.getElementById('modal-container').classList.add('hidden')" 
+                        class="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg w-full transition duration-150">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration: Set the endpoint for your FastAPI server
+        // IMPORTANT: Reverting to the absolute URL to fix 'Failed to parse URL' error.
+        // NOTE: This URL (127.0.0.1) is often blocked by browser security in sandboxed environments.
+        const API_ENDPOINT = "http://127.0.0.1:8080/chat"; 
+        
+        // Configuration for Network Retries
+        const MAX_RETRIES = 3;
+        const INITIAL_BACKOFF_MS = 1000; // 1 second
+        
+        // --- DOM Elements ---
+        const conversationLog = document.getElementById('conversation-log');
+        const mainToggleBtn = document.getElementById('main-toggle-btn');
+        const statusMessageEl = document.getElementById('status-message');
+        const recordingIndicator = document.getElementById('recording-indicator');
+        const modalContainer = document.getElementById('modal-container');
+        
+        // --- State Variables ---
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const synth = window.speechSynthesis;
+        let recognition = null;
+        let isConversationActive = false;
+        let sweetVoice = null; 
+
+        // --- Utility Functions ---
+
+        /** Displays a custom modal message (replaces alert()) */
+        function showModal(message) {
+            document.getElementById('modal-message').textContent = message;
+            modalContainer.classList.remove('hidden');
+            modalContainer.classList.add('flex');
+        }
+
+        /** Updates the UI status and button state */
+        function updateUI(status, isRecording = false) {
+            statusMessageEl.textContent = status;
+            recordingIndicator.classList.toggle('hidden', !isRecording);
+            recordingIndicator.classList.toggle('recording-pulse', isRecording);
+            mainToggleBtn.textContent = isConversationActive ? 'Stop Conversation' : 'Start Conversation';
+            // Change button color based on state
+            mainToggleBtn.classList.toggle('bg-red-600', isConversationActive);
+            mainToggleBtn.classList.toggle('hover:bg-red-700', isConversationActive);
+            mainToggleBtn.classList.toggle('bg-indigo-600', !isConversationActive);
+            mainToggleBtn.classList.toggle('hover:bg-indigo-700', !isConversationActive);
+            // Disable button only when AI is processing/speaking, not while listening
+            mainToggleBtn.disabled = isConversationActive && !isRecording && !status.includes('Listening'); 
+        }
+
+        /** Appends a message to the conversation log */
+        function appendMessage(role, text) {
+            const isUser = role === 'user';
+            const bubbleClass = isUser ? 'user-bubble' : 'ai-bubble';
+            const label = isUser ? 'You' : 'AI';
+
+            const messageDiv = document.createElement('div');
+            // 'ml-auto' pushes user bubble to the right, 'mr-auto' keeps AI left
+            messageDiv.className = `max-w-[80%] p-3 rounded-xl shadow-xl text-white ${bubbleClass} ${isUser ? 'ml-auto' : 'mr-auto'}`;
+            messageDiv.innerHTML = `<span class="font-bold">${label}:</span> ${text}`;
+            
+            conversationLog.appendChild(messageDiv);
+            // Scroll to the latest message
+            conversationLog.scrollTop = conversationLog.scrollHeight;
+        }
+        
+        // --- Voice Selection Logic ---
+        function selectSweetVoice() {
+            const voices = synth.getVoices();
+            if (voices.length === 0) return;
+
+            // Preferred voice names, typically female voices for an "assistant" persona
+            const preferredNames = ["Google US English", "Samantha", "Zoe", "Karen", "Serena", "Tess"];
+
+            for (const name of preferredNames) {
+                sweetVoice = voices.find(voice => voice.name.includes(name) && voice.lang.startsWith('en'));
+                if (sweetVoice) return;
+            }
+            
+            // Fallback 1: Any English voice that doesn't explicitly contain "male"
+            sweetVoice = voices.find(voice => voice.lang.startsWith('en') && !voice.name.toLowerCase().includes("male"));
+            if (sweetVoice) return;
+
+            // Fallback 2: Any English voice
+            sweetVoice = voices.find(voice => voice.lang.startsWith('en'));
+        }
+        
+        // Load voices dynamically and retry selection if they load late
+        if (synth) {
+            if (synth.onvoiceschanged !== undefined) {
+                synth.onvoiceschanged = selectSweetVoice;
+            }
+            selectSweetVoice(); 
+        }
+
+        // --- Core 7-Step Voice-to-Voice Loop Implementation ---
+
+        /**
+         * Step 6 & 7: Speak the response and resume the microphone.
+         */
+        function speakAndResume(text) {
+            if (!text || !synth) {
+                appendMessage('ai', text + ' (TTS not supported, resuming mic.)');
+                startRecognition(); // Step 7
+                return;
+            }
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-US'; 
+            
+            if (sweetVoice) {
+                utterance.voice = sweetVoice;
+            } 
+            
+            utterance.onstart = () => {
+                // Step 6: AI response spoken (UI Update)
+                updateUI('AI Speaking...', false); 
+            };
+
+            utterance.onend = () => {
+                // Step 7: Mic resumes
+                if (isConversationActive) {
+                    updateUI('AI Finished Speaking. Mic Resuming...', false);
+                    startRecognition(); 
+                } else {
+                    updateUI('Conversation stopped.', false);
+                }
+            };
+
+            utterance.onerror = (event) => {
+                console.error('TTS Error:', event.error);
+                appendMessage('ai', text + ` (TTS Error: ${event.error})`);
+                startRecognition(); // Resume loop despite TTS error
+            };
+
+            synth.speak(utterance);
+        }
+
+        /**
+         * Step 3, 4, 5: Send text to FastAPI, get AI response via HTTP POST.
+         * Includes Exponential Backoff and Retry logic.
+         */
+        async function processQuery(query) {
+            // Stop the mic before processing the query
+            if (recognition) recognition.abort(); 
+
+            appendMessage('user', query);
+            updateUI('Sending to Ollama (Processing)...', false);
+
+            try {
+                for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                    try {
+                        // 1. Fetch
+                        const response = await fetch(API_ENDPOINT, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ prompt: query }),
+                        });
+
+                        if (!response.ok) {
+                            // Throw an error if HTTP status is not 2xx
+                            throw new Error(`HTTP Status ${response.status}`);
+                        }
+
+                        // 2. Parse JSON
+                        const data = await response.json();
+                        
+                        // 3. Check for internal AI/Server error key
+                        const aiResponse = data.response; 
+                        if (data.error) {
+                            throw new Error(`AI/Server Error: ${aiResponse}`); 
+                        }
+                        
+                        // Success: proceed to speaking and return
+                        speakAndResume(aiResponse);
+                        return;
+
+                    } catch (error) {
+                        // Suppress console logs for retries to reduce noise
+                        // console.error(`FastAPI/Ollama attempt ${attempt + 1}/${MAX_RETRIES} failed:`, error);
+
+                        if (attempt < MAX_RETRIES - 1) {
+                            // Calculate exponential backoff delay
+                            const delay = INITIAL_BACKOFF_MS * Math.pow(2, attempt);
+                            // Only show the delay/retry status for the user
+                            updateUI(`Connection failed. Retrying in ${delay / 1000}s... (Attempt ${attempt + 2}/${MAX_RETRIES})`, false);
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                        } else {
+                            // Last attempt failed, re-throw to be caught by the outer catch block
+                            throw error;
+                        }
+                    }
+                }
+            } catch (error) {
+                // This catches the error if all retries failed (or a non-retryable error occurred)
+                console.error('FastAPI/Ollama Critical Error:', error);
+                
+                // Customize error message based on the API endpoint being localhost
+                const errorMessage = (error.message.includes('Failed to fetch') || error.message.includes('URL'))
+                    ? `CRITICAL NETWORK ERROR: Failed to connect to the backend (${API_ENDPOINT}) after ${MAX_RETRIES} attempts. This often means the Python backend is not running, or more likely, your browser is blocking the connection to 'localhost' (127.0.0.1) due to security restrictions.`
+                    : `Critical Error: ${error.message}. Ensure the Python backend is running and Ollama is reachable.`;
+
+                updateUI('CRITICAL ERROR. Stopped.', false);
+                showModal(errorMessage);
+                isConversationActive = false;
+                mainToggleBtn.disabled = false;
+            }
+        }
+
+        // --- Speech Recognition Setup & Handlers ---
+        
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = false; // Key for the 7-step cycle
+            recognition.interimResults = false; 
+            recognition.lang = 'en-US'; 
+            
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript.trim();
+                
+                if (transcript.length > 0) {
+                    // Step 2: Speech → Text
+                    processQuery(transcript);
+                } else if (isConversationActive) {
+                    // If active but no speech detected, restart listening
+                    updateUI('No speech detected. Re-listening...', true);
+                    startRecognition(); 
+                }
+            };
+
+            recognition.onerror = (event) => {
+                // Ignore 'aborted' errors which are expected when we manually call recognition.abort()
+                if (event.error === 'aborted') {
+                    return; 
+                }
+
+                console.error('Speech Recognition Error:', event.error);
+                
+                if (event.error === 'not-allowed') {
+                    showModal("Microphone access denied. Please enable it in your browser settings.");
+                    isConversationActive = false;
+                    updateUI('Permission Denied. Stopped.', false);
+                    mainToggleBtn.disabled = false;
+                } else if (isConversationActive) {
+                    // Ignore common errors like 'no-speech' and restart if the conversation is active
+                    updateUI(`Mic Error (${event.error}). Retrying...`, true);
+                    startRecognition();
+                } else {
+                    updateUI('Recognition Error. Stopped.', false);
+                }
+            };
+
+            recognition.onend = () => {
+                // If conversation is active and TTS is not running, and we didn't just get a result, restart the mic.
+                // This prevents unexpected stops from killing the loop.
+                if (isConversationActive && !synth.speaking) {
+                    // Don't restart if processQuery was called (it will handle the restart logic)
+                    if (statusMessageEl.textContent.includes('Listening')) {
+                        updateUI('Auto-restarting...', true);
+                        startRecognition(); 
+                    }
+                }
+            };
+
+            recognition.onstart = () => {
+                // Step 1: Microphone ON (UI Update)
+                updateUI('Listening for your voice...', true);
+            };
+            
+        } else {
+            showModal('Your browser does not fully support the Web Speech API required for this assistant.');
+            mainToggleBtn.disabled = true;
+            updateUI('Speech Recognition Not Supported.', false);
+        }
+
+        /** Attempts to start the microphone. */
+        function startRecognition() {
+            if (isConversationActive && recognition) {
+                try {
+                    // Check if already listening to prevent 'already started' error
+                    if (statusMessageEl.textContent.includes('Listening')) return;
+                    recognition.start();
+                } catch (e) {
+                    if (e.name !== 'InvalidStateError') {
+                        console.error('Failed to start recognition:', e);
+                        updateUI('Failed to restart microphone. Conversation stopped.', false);
+                        isConversationActive = false;
+                        mainToggleBtn.disabled = false;
+                    }
+                    // InvalidStateError means it was already running/stopping, which is fine.
+                }
+            }
+        }
+
+        // --- Main Conversation Control ---
+
+        function toggleConversation() {
+            if (isConversationActive) {
+                // STOP Conversation
+                isConversationActive = false;
+                if (recognition) recognition.abort(); 
+                if (synth.speaking) synth.cancel(); 
+                updateUI('Conversation stopped. Click Start to resume.', false);
+                mainToggleBtn.disabled = false;
+            } else {
+                // START Conversation
+                isConversationActive = true;
+                conversationLog.innerHTML = ''; 
+                
+                // Initial welcome message starts the voice loop: Step 6 -> Step 7 -> Step 1
+                setTimeout(() => {
+                    speakAndResume("Hello! I am your friendly voice assistant powered by Ollama and FastAPI. How can I help you today?");
+                }, 500); 
+            }
+        }
+
+        // Initialize UI on load
+        window.onload = () => {
+             updateUI('Ready to start the conversation.', false);
+             selectSweetVoice();
+        };
+    </script>
+</body>
+</html>
