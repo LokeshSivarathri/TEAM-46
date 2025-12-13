@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Audio-to-Text & Speaker</title>
+    <title>Live Audio-to-Text & Speaker with Support</title>
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Use Inter font family -->
@@ -39,7 +39,7 @@
         </div>
 
         <!-- Controls -->
-        <div class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+        <div class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
             
             <button id="start-btn" 
                     class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 disabled:bg-gray-500"
@@ -58,7 +58,36 @@
             
         </div>
         
-        <p class="mt-4 text-xs text-center text-gray-500">
+        <!-- Emergency/Helpline Section (New) -->
+        <div class="p-4 bg-red-800 bg-opacity-30 rounded-lg border border-red-700 shadow-inner">
+            <h2 class="text-lg font-semibold text-red-300 mb-2">Need Immediate Voice Support?</h2>
+            
+            <!-- Innovation Council Credit Emphasis -->
+            <p class="text-xs text-red-200 mb-3 italic">
+                (This information is provided as an optional, high-priority fallback for users on simpler devices, like Keypad Mobile or Telephone.)
+            </p>
+
+            <div class="flex flex-col space-y-2">
+                
+                <!-- AASRA Helpline -->
+                <div class="flex items-center justify-between p-2 bg-red-900 bg-opacity-50 rounded-md">
+                    <span class="text-sm font-medium text-white">India: AASRA Helpline (24/7)</span>
+                    <a href="tel:+912227546669" class="text-sm font-bold text-red-300 hover:underline">
+                        +91-22-27546669
+                    </a>
+                </div>
+                
+                <!-- Trusted Person -->
+                <div class="flex items-center justify-between p-2 bg-red-900 bg-opacity-50 rounded-md">
+                    <span class="text-sm font-medium text-white">Trusted Person Near You</span>
+                    <a href="tel:+917815875511" class="text-sm font-bold text-red-300 hover:underline">
+                        +91 7815875511
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        <p class="mt-6 text-xs text-center text-gray-500">
             Note: Speech recognition quality and language support vary by browser.
         </p>
 
